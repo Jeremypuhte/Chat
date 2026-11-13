@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Code-Chat</title>
+<style>
+:root{--bg:#f6f6f4;--surface:#fff;--text:#1d1d1b;--muted:#6f6f6a;--line:#e3e3de;--accent:#2f6fed;--accent-t:#fff;--mine:#2f6fed;--mine-t:#fff;--theirs:#ececE7;--theirs-t:#1d1d1b;--err:#c0392b;--ok:#2e9e5b;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--surface:#1f1f1e;--text:#f0f0ec;--muted:#9a9a93;--line:#323230;--accent:#5b8cf5;--accent-t:#0d0d0c;--mine:#3b6fe0;--mine-t:#fff;--theirs:#2b2b29;--theirs-t:#f0f0ec;--err:#ff7b6b;--ok:#4cc27f;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+#app{height:100%;display:flex;max-width:1000px;margin:0 auto;background:var(--surface);border-left:1px solid var(--line);border-right:1px solid var(--line)}
+button,input{font:inherit;color:inherit}
+input{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;outline:none}
+input:focus{border-color:var(--accent)}
+button{background:var(--accent);color:var(--accent-t);border:0;border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:600}
+button.ghost{background:transparent;color:var(--accent);padding:6px 8px}
+button:disabled{opacity:.5}
+#side{width:320px;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.pad{padding:14px}
+h1{font-size:18px;margin:0 0 4px}
+.muted{color:var(--muted);font-size:14px}
+.code{font:700 26px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.12em;margin:6px 0}
+.row{display:flex;gap:8px}
+#list{flex:1;overflow-y:auto;border-top:1px solid var(--line)}
+.chat{padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;align-items:center;gap:8px}
+.chat:hover,.chat.on{background:var(--bg)}
+.chat .n{flex:1}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line)}
+.dot.on{background:var(--ok)}
+.badge{background:var(--accent);color:var(--accent-t);border-radius:10px;font-size:12px;padding:1px 7px;font-weight:700}
+#head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600}
+#head .st{font-weight:400;font-size:13px;color:var(--muted);margin-left:auto}
+#back{display:none}
+#msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:6px}
+.m{max-width:78%;padding:8px 12px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
+.m.me{align-self:flex-end;background:var(--mine);color:var(--mine-t);border-bottom-right-radius:4px}
+.m.th{align-self:flex-start;background:var(--theirs);color:var(--theirs-t);border-bottom-left-radius:4px}
+.t{display:block;font-size:11px;opacity:.7;margin-top:2px}
+#send{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line)}
+.empty{margin:auto;text-align:center;color:var(--muted);padding:20px}
+#err{color:var(--err);font-size:14px;min-height:20px;margin-top:6px}
+#setup{margin:auto;max-width:360px;width:100%;padding:24px}
+#net{font-size:12px;color:var(--muted);margin-top:6px}
+@media (max-width:700px){
+ #side{width:100%;border:0}
+ #main{display:none}
+ #app.chatting #side{display:none}
+ #app.chatting #main{display:flex}
+ #back{display:inline-block}
+}
+</style>
+</head>
+<body>
+<div id="app"><div class="empty">Lade …</div></div>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+(function(){
+var PREFIX='codechat-',KEY='codechat_state_v1',ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+var app=document.getElementById('app');
+var S=load(),peer=null,conns={},current=null,online=false;
+var listEl,msgsEl,headEl,stEl,sendEl,inputEl,addErr,netEl;
+
+function load(){try{return JSON.parse(localStorage.getItem(KEY))||{}}catch(e){return {}}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+function genCode(){var s='';for(var i=0;i<6;i++)s+=ALPHA[Math.floor(Math.random()*ALPHA.length)];return s}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+function tStr(ts){return new Date(ts).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
+
+// ---------- Start ----------
+function start(){
+  if(!S.name){setup();return}
+  if(!S.code){S.code=genCode();save()}
+  if(!S.friends)S.friends={};
+  buildUI();connectServer();
+}
+function setup(){
+  app.className='';app.textContent='';
+  var b=el('div');b.id='setup';
+  b.appendChild(el('h1',null,'Willkommen 👋'));
+  b.appendChild(el('p','muted','Wähle einen Namen. Du bekommst einen persönlichen Code, den du deinem Kumpel schickst.'));
+  var i=el('input');i.placeholder='Dein Name';i.maxLength=24;
+  var bt=el('button',null,'Los geht’s');bt.style.marginTop='10px';
+  var er=el('div');er.id='err';
+  b.append(i,bt,er);app.appendChild(b);
+  function go(){var n=i.value.trim();if(!n){er.textContent='Bitte einen Namen eingeben.';return}S.name=n;S.code=genCode();S.friends={};save();start()}
+  bt.onclick=go;i.onkeydown=function(e){if(e.key==='Enter')go()};i.focus();
+}
+
+// ---------- Netzwerk (WebRTC über PeerJS) ----------
+function connectServer(){
+  if(!window.Peer){netEl.textContent='PeerJS konnte nicht geladen werden (Internet?).';return}
+  peer=new Peer(PREFIX+S.code);
+  peer.on('open',function(){online=true;netEl.textContent='● Online – Freunde können dich erreichen';netEl.style.color='var(--ok)';
+    Object.keys(S.friends).forEach(function(c){connectTo(c)})});
+  peer.on('connection',function(conn){wire(conn)});
+  peer.on('disconnected',function(){online=false;netEl.textContent='Verbindung zum Server verloren, verbinde neu …';netEl.style.color='';try{peer.reconnect()}catch(e){}});
+  peer.on('error',function(err){
+    if(err.type==='unavailable-id'){netEl.textContent='Dein Code ist gerade in einem anderen Tab/Gerät aktiv. Schließe es dort.';netEl.style.color='var(--err)'}
+    else if(err.type==='peer-unavailable'){renderHead()}
+    else if(err.type==='network'||err.type==='server-error'||err.type==='socket-error'){netEl.textContent='Server nicht erreichbar, versuche es erneut …'}
+  });
+  setInterval(function(){
+    if(!peer||peer.destroyed)return;
+    if(peer.disconnected){try{peer.reconnect()}catch(e){}}
+    Object.keys(S.friends).forEach(function(c){var f=S.friends[c];
+      if((c===current||hasPending(c))&&!isOpen(c))connectTo(c)});
+  },8000);
+}
+function isOpen(c){return conns[c]&&conns[c].open}
+function hasPending(c){var f=S.friends[c];return f&&f.msgs.some(function(m){return m.from==='me'&&!m.ok})}
+function connectTo(c){
+  if(!peer||!online||isOpen(c)||c===S.code)return;
+  if(conns[c]&&!conns[c].open&&conns[c]._trying&&Date.now()-conns[c]._trying<7000)return;
+  var conn=peer.connect(PREFIX+c,{reliable:true});conn._trying=Date.now();conns[c]=conn;wire(conn);
+}
+function wire(conn){
+  var c=conn.peer.slice(PREFIX.length);
+  conn.on('open',function(){
+    conns[c]=conn;conn.send({type:'hello',name:S.name});flush(c);renderList();renderHead();
+  });
+  conn.on('data',function(d){handle(c,d)});
+  conn.on('close',function(){if(conns[c]===conn){delete conns[c]}renderList();renderHead()});
+  conn.on('error',function(){});
+}
+function ensureFriend(c,name){
+  if(!S.friends[c])S.friends[c]={name:name||('Freund '+c),msgs:[],unread:0};
+  else if(name)S.friends[c].name=name;
+}
+function handle(c,d){
+  if(!d||typeof d!=='object')return;
+  if(d.type==='hello'){ensureFriend(c,String(d.name||'').slice(0,24));save();renderList();renderHead();flush(c)}
+  else if(d.type==='msg'&&typeof d.text==='string'){
+    ensureFriend(c);var f=S.friends[c];
+    if(!f.msgs.some(function(m){return m.id===d.id})){
+      f.msgs.push({id:String(d.id),from:'them',text:d.text.slice(0,1000),ts:Number(d.ts)||Date.now()});
+      if(current!==c)f.unread=(f.unread||0)+1;
+      save();
+    }
+    if(isOpen(c))conns[c].send({type:'ack',id:d.id});
+    renderList();if(current===c)renderMsgs();
+  }
+  else if(d.type==='ack'){
+    var fr=S.friends[c];if(!fr)return;
+    fr.msgs.forEach(function(m){if(m.id===d.id)m.ok=true});save();if(current===c)renderMsgs();
+  }
+}
+function flush(c){
+  var f=S.friends[c];if(!f||!isOpen(c))return;
+  f.msgs.forEach(function(m){if(m.from==='me'&&!m.ok)conns[c].send({type:'msg',id:m.id,text:m.text,ts:m.ts})});
+}
+
+// ---------- UI ----------
+function buildUI(){
+  app.className='';app.textContent='';
+  var side=el('div');side.id='side';
+  var top=el('div','pad');
+  top.appendChild(el('h1',null,'Hi, '+S.name));
+  top.appendChild(el('div','muted','Dein Code – schick ihn deinem Kumpel:'));
+  var cr=el('div','row');cr.style.alignItems='center';
+  var code=el('div','code',S.code);code.style.flex='1';
+  var cp=el('button','ghost','Kopieren');
+  cp.onclick=function(){try{navigator.clipboard.writeText(S.code).then(function(){cp.textContent='Kopiert ✓'},function(){cp.textContent='Selbst kopieren'})}catch(e){cp.textContent='Selbst kopieren'}setTimeout(function(){cp.textContent='Kopieren'},1800)};
+  cr.append(code,cp);top.appendChild(cr);
+  netEl=el('div');netEl.id='net';netEl.textContent='Verbinde …';top.appendChild(netEl);
+  var l=el('div','muted','Freund hinzufügen:');l.style.marginTop='12px';top.appendChild(l);
+  var ar=el('div','row');ar.style.marginTop='6px';
+  var ai=el('input');ai.placeholder='Code deines Kumpels';ai.maxLength=6;ai.style.textTransform='uppercase';
+  var ab=el('button',null,'Hinzufügen');ar.append(ai,ab);top.appendChild(ar);
+  addErr=el('div');addErr.id='err';top.appendChild(addErr);
+  listEl=el('div');listEl.id='list';side.append(top,listEl);
+
+  var main=el('div');main.id='main';
+  headEl=el('div');headEl.id='head';
+  var back=el('button','ghost','‹ Zurück');back.id='back';
+  back.onclick=function(){app.classList.remove('chatting');current=null;renderAll()};
+  var nm=el('span');nm.id='nm';stEl=el('span','st');
+  headEl.append(back,nm,stEl);
+  msgsEl=el('div');msgsEl.id='msgs';
+  sendEl=el('div');sendEl.id='send';
+  inputEl=el('input');inputEl.placeholder='Nachricht schreiben …';inputEl.maxLength=1000;
+  var sb=el('button',null,'Senden');sendEl.append(inputEl,sb);
+  main.append(headEl,msgsEl,sendEl);app.append(side,main);
+
+  function add(){
+    var c=ai.value.trim().toUpperCase();addErr.textContent='';
+    if(c.length!==6||!/^[A-Z2-9]+$/.test(c)){addErr.textContent='Der Code hat 6 Zeichen.';return}
+    if(c===S.code){addErr.textContent='Das ist dein eigener Code 🙂';return}
+    ensureFriend(c);save();ai.value='';connectTo(c);openChat(c);
+  }
+  ab.onclick=add;ai.onkeydown=function(e){if(e.key==='Enter')add()};
+  function send(){
+    var t=inputEl.value.trim();if(!t||!current)return;inputEl.value='';
+    var f=S.friends[current];f.msgs.push({id:uid(),from:'me',text:t,ts:Date.now(),ok:false});
+    if(f.msgs.length>500)f.msgs=f.msgs.slice(-500);
+    save();renderMsgs();
+    if(isOpen(current))flush(current);else connectTo(current);
+  }
+  sb.onclick=send;inputEl.onkeydown=function(e){if(e.key==='Enter')send()};
+  renderAll();
+}
+function renderAll(){renderList();renderHead();renderMsgs()}
+function renderList(){
+  if(!listEl)return;listEl.textContent='';
+  var keys=Object.keys(S.friends);
+  if(!keys.length){listEl.appendChild(el('div','empty','Noch keine Freunde. Gib den Code deines Kumpels ein – oder schick ihm deinen.'));return}
+  keys.forEach(function(c){
+    var f=S.friends[c],d=el('div','chat'+(c===current?' on':''));
+    d.appendChild(el('span','dot'+(isOpen(c)?' on':'')));
+    d.appendChild(el('span','n',f.name));
+    if(f.unread)d.appendChild(el('span','badge',String(f.unread)));
+    d.onclick=function(){openChat(c)};listEl.appendChild(d);
+  });
+}
+function renderHead(){
+  if(!headEl)return;var nm=document.getElementById('nm');
+  if(!current){nm.textContent='';stEl.textContent='';sendEl.style.display='none';return}
+  var f=S.friends[current];nm.textContent=f.name;sendEl.style.display='flex';
+  stEl.textContent=isOpen(current)?'● online':'offline – Nachrichten werden zugestellt, sobald er/sie online ist';
+  stEl.style.color=isOpen(current)?'var(--ok)':'';
+  renderList();
+}
+function renderMsgs(){
+  if(!msgsEl)return;msgsEl.textContent='';
+  if(!current){msgsEl.appendChild(el('div','empty','Wähle links einen Chat aus.'));return}
+  var f=S.friends[current];
+  if(!f.msgs.length)msgsEl.appendChild(el('div','empty','Schreib die erste Nachricht 👋'));
+  f.msgs.forEach(function(m){
+    var b=el('div','m '+(m.from==='me'?'me':'th'),m.text);
+    b.appendChild(el('span','t',tStr(m.ts)+(m.from==='me'?(m.ok?' ✓':' ⏳'):'')));
+    msgsEl.appendChild(b);
+  });
+  msgsEl.scrollTop=msgsEl.scrollHeight;
+}
+function openChat(c){
+  current=c;S.friends[c].unread=0;save();app.classList.add('chatting');
+  renderAll();if(!isOpen(c))connectTo(c);inputEl.focus();
+}
+
+start();
+})();
+</script>
+</body>
+</html>
